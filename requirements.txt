@@ -1,0 +1,5 @@
+helix-py
+sentence-transformers
+torch
+transformers
+tqdm
