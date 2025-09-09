@@ -8,11 +8,13 @@ OUTPUT = Path(__file__).parent.parent / "embeddinggemma-onnx"
 print(f"Starting export of {MODEL} to {OUTPUT}")
 
 run([
-    "optimum-cli",
+    str(Path(__file__).parent / "venv" / "bin" / "optimum-cli"),
     "export",
+    "onnx",
     "--model",
     MODEL,
-    OUTPUT
+    str(OUTPUT),
+    # "--quantize"
 ])
 
 print(f"Model {MODEL} exported to {OUTPUT}")
