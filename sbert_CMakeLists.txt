@@ -1,0 +1,25 @@
+cmake_minimum_required(VERSION 3.14)
+project(SBertONNX CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# ONNXRUNTIME: set these to your local install
+# Example: -DONNXRUNTIME_DIR=/path/to/onnxruntime
+if(NOT DEFINED ONNXRUNTIME_DIR)
+  message(FATAL_ERROR "Set -DONNXRUNTIME_DIR to your ONNX Runtime install")
+endif()
+
+include_directories(${ONNXRUNTIME_DIR}/include)
+link_directories(${ONNXRUNTIME_DIR}/lib)
+
+# tokenizers-cpp headers + lib
+# Example: -DTOKENIZERS_CPP_INCLUDE=/path/to/tokenizers-cpp/include
+#          -DTOKENIZERS_CPP_LIB=/path/to/libtokenizers_cpp.a (or .so/.dylib)
+if(NOT DEFINED TOKENIZERS_CPP_INCLUDE OR NOT DEFINED TOKENIZERS_CPP_LIB)
+  message(FATAL_ERROR "Set -DTOKENIZERS_CPP_INCLUDE and -DTOKENIZERS_CPP_LIB")
+endif()
+include_directories(${TOKENIZERS_CPP_INCLUDE})
+
+add_executable(sbert sbert_example.cpp)
+target_link_libraries(sbert PRIVATE onnxruntime ${TOKENIZERS_CPP_LIB})

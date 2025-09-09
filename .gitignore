@@ -7,6 +7,12 @@
 ehthumbs.db
 Thumbs.db
 
+# Model 
+embeddinggemma-onnx/
+
+# Tests
+sbert_example/
+
 # CMake generated files
 CMakeCache.txt
 CMakeFiles/
@@ -27,6 +33,11 @@ bin/
 *.swp
 *.swo
 *~
+
+# Python files
+__pycache__/
+*.pyc
+venv/
 
 # Executables
 hnsw_search
