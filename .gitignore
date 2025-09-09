@@ -1,0 +1,53 @@
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+CTestTestfile.cmake
+install_manifest.txt
+compile_commands.json
+
+# Build directories
+build/
+out/
+bin/
+
+# IDE files
+.vs/
+.idea/
+*.swp
+*.swo
+*~
+
+# Executables
+hnsw_search
+*.exe
+*.out
+*.app
+
+# Object files
+*.o
+*.obj
+
+# Library files
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+
+# Debug files
+*.dSYM/
+
+# Temporary files
+*.tmp
+*.temp
