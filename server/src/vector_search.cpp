@@ -57,17 +57,17 @@ void VectorSearch::loadOrCreateIndex(const std::string& index_file) {
     }
 }
 
-std::vector<SearchResult> VectorSearch::searchText(const std::string& query, int k) {
+std::vector<SearchResult> VectorSearch::searchText(const std::string& query, int k, float threshold, int efSearch) {
     if (!isInitialized()) {
         std::cerr << "Error: System not initialized" << std::endl;
         return {};
     }
     
     auto queryEmbedding = getEmbedding(query);
-    return searchEmbedding(queryEmbedding, k);
+    return searchEmbedding(queryEmbedding, k, threshold, efSearch);
 }
 
-std::vector<SearchResult> VectorSearch::searchEmbedding(const std::vector<float>& queryEmbedding, int k) {
+std::vector<SearchResult> VectorSearch::searchEmbedding(const std::vector<float>& queryEmbedding, int k, float threshold, int efSearch) {
     if (!isInitialized()) {
         std::cerr << "Error: System not initialized" << std::endl;
         return {};
@@ -83,6 +83,7 @@ std::vector<SearchResult> VectorSearch::searchEmbedding(const std::vector<float>
     std::vector<float> distances(k);
     std::vector<faiss::idx_t> indices(k);
     
+    index->hnsw.efSearch = efSearch;
     index->search(1, queryEmbedding.data(), k, distances.data(), indices.data());
     
     std::vector<SearchResult> results;
@@ -92,7 +93,11 @@ std::vector<SearchResult> VectorSearch::searchEmbedding(const std::vector<float>
         if (indices[i] >= 0 && indices[i] < static_cast<faiss::idx_t>(indexToDocumentId_.size())) {
             size_t documentId = indexToDocumentId_[indices[i]];
             float score = 1.0f / (1.0f + distances[i]); // Convert distance to similarity score
-            results.push_back(buildSearchResult(documentId, score));
+            
+            // Only include results above the threshold
+            if (score >= threshold) {
+                results.push_back(buildSearchResult(documentId, score));
+            }
         }
     }
     
@@ -338,8 +343,8 @@ void VectorSearch::initializeIndex() {
         return;
     }
     
-    index = new faiss::IndexHNSWFlat(d, 16); // M = 16
-    index->hnsw.efConstruction = 200;
+    index = new faiss::IndexHNSWFlat(d, 32); // M = 16
+    index->hnsw.efConstruction = 400;
     
     std::cout << "Initialized HNSW index with dimension " << d << std::endl;
 }

@@ -61,6 +61,8 @@
         "format": "cpp",
         "ostream": "cpp",
         "text_encoding": "cpp",
-        "thread": "cpp"
-    }
+        "thread": "cpp",
+        "*.tcc": "cpp"
+    },
+    "cmake.sourceDirectory": "/Users/ashwa/Desktop/Misc/Projects/sift2/server"
 }

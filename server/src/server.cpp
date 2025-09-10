@@ -137,6 +137,8 @@ void SearchServer::handleSearch(const httplib::Request& req, httplib::Response& 
 
             std::string query = request["query"];
             int k = request.value("k", 10);
+            float threshold = request.value("threshold", 0.0f);
+            int efSearch = request.value("efSearch", 350);
             
             std::vector<SearchResult> results;
             std::string searchType = request.value("type", "semantic");
@@ -160,11 +162,14 @@ void SearchServer::handleSearch(const httplib::Request& req, httplib::Response& 
                     result.text = doc.text;
                     result.score = 1.0f; // No relevance scoring for text search
                     result.metadata = doc.metadata;
-                    results.push_back(result);
+                    // Apply threshold for text search too
+                    if (result.score >= threshold) {
+                        results.push_back(result);
+                    }
                 }
             } else {
                 // Semantic search (default)
-                results = vectorSearch_->searchText(query, k);
+                results = vectorSearch_->searchText(query, k, threshold, efSearch);
             }
 
             json response = json::array();

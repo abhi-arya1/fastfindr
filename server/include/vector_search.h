@@ -29,8 +29,8 @@ public:
     bool updateDocument(size_t id, const std::string& text, const std::map<std::string, std::string>& metadata = {});
     bool deleteDocument(size_t id);
     
-    std::vector<SearchResult> searchText(const std::string& query, int k = 10);
-    std::vector<SearchResult> searchEmbedding(const std::vector<float>& queryEmbedding, int k = 10);
+    std::vector<SearchResult> searchText(const std::string& query, int k = 10, float threshold = 0.0f, int efSearch = 350);
+    std::vector<SearchResult> searchEmbedding(const std::vector<float>& queryEmbedding, int k = 10, float threshold = 0.0f, int efSearch = 350);
     std::vector<SearchResult> searchByMetadata(const std::string& key, const std::string& value, int k = 10);
     
     void saveIndex(const std::string& index_file);
