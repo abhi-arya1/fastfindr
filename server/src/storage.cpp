@@ -2,6 +2,8 @@
 #include <iostream>
 #include <sstream>
 #include <algorithm>
+#include <random>
+#include <chrono>
 
 Storage::Storage(const std::string& dbPath) 
     : db_(nullptr), dbPath_(dbPath), inTransaction_(false) {
@@ -41,9 +43,16 @@ void Storage::close() {
 }
 
 bool Storage::createTables() {
+    // Drop old tables if they exist (for migration)
+    const std::string dropOldTables = R"(
+        DROP TABLE IF EXISTS document_metadata;
+        DROP TABLE IF EXISTS documents;
+    )";
+    
+    // Create new tables with TEXT id
     const std::string createDocumentsTable = R"(
         CREATE TABLE IF NOT EXISTS documents (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id TEXT PRIMARY KEY,
             text TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -52,7 +61,7 @@ bool Storage::createTables() {
     
     const std::string createMetadataTable = R"(
         CREATE TABLE IF NOT EXISTS document_metadata (
-            document_id INTEGER,
+            document_id TEXT,
             key TEXT NOT NULL,
             value TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -70,33 +79,83 @@ bool Storage::createTables() {
         CREATE INDEX IF NOT EXISTS idx_metadata_key_value ON document_metadata(key, value);
     )";
     
+    // For backwards compatibility, check if we need to migrate
+    bool needsMigration = false;
+    const std::string checkTable = "SELECT sql FROM sqlite_master WHERE type='table' AND name='documents';";
+    sqlite3_stmt* stmt = prepareStatement(checkTable);
+    if (stmt) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char* sql = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            if (sql && std::string(sql).find("INTEGER PRIMARY KEY") != std::string::npos) {
+                needsMigration = true;
+            }
+        }
+        finalizeStatement(stmt);
+    }
+    
+    if (needsMigration) {
+        std::cout << "Migrating database to support custom text IDs..." << std::endl;
+        executeSQL(dropOldTables);
+    }
+    
     return executeSQL(createDocumentsTable) &&
            executeSQL(createMetadataTable) &&
            executeSQL(createTextIndex) &&
            executeSQL(createMetadataIndex);
 }
 
-size_t Storage::addDocument(const std::string& text, const std::map<std::string, std::string>& metadata) {
-    if (!db_) {
-        std::cerr << "Database not initialized" << std::endl;
-        return 0;
+std::string Storage::generateRandomId() {
+    // Generate a random ID if none provided
+    static const char alphanum[] =
+        "0123456789"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz";
+    
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, sizeof(alphanum) - 2);
+    
+    std::string id = "doc_";
+    for (int i = 0; i < 12; ++i) {
+        id += alphanum[dis(gen)];
     }
     
-    const std::string sql = "INSERT INTO documents (text) VALUES (?);";
-    sqlite3_stmt* stmt = prepareStatement(sql);
-    if (!stmt) return 0;
+    // Add timestamp for uniqueness
+    auto now = std::chrono::system_clock::now();
+    auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    id += "_" + std::to_string(timestamp);
     
-    sqlite3_bind_text(stmt, 1, text.c_str(), -1, SQLITE_STATIC);
+    return id;
+}
+
+std::string Storage::addDocument(const std::string& text, const std::map<std::string, std::string>& metadata, const std::string& customId) {
+    if (!db_) {
+        std::cerr << "Database not initialized" << std::endl;
+        return "";
+    }
+    
+    std::string documentId = customId.empty() ? generateRandomId() : customId;
+    
+    // Check if document already exists
+    if (!customId.empty() && documentExists(documentId)) {
+        std::cerr << "Document with id '" << documentId << "' already exists. Use upsert to update." << std::endl;
+        return "";
+    }
+    
+    const std::string sql = "INSERT INTO documents (id, text) VALUES (?, ?);";
+    sqlite3_stmt* stmt = prepareStatement(sql);
+    if (!stmt) return "";
+    
+    sqlite3_bind_text(stmt, 1, documentId.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, text.c_str(), -1, SQLITE_STATIC);
     
     int rc = sqlite3_step(stmt);
     finalizeStatement(stmt);
     
     if (rc != SQLITE_DONE) {
         std::cerr << "Error inserting document: " << sqlite3_errmsg(db_) << std::endl;
-        return 0;
+        return "";
     }
-    
-    size_t documentId = static_cast<size_t>(sqlite3_last_insert_rowid(db_));
     
     // Add metadata
     for (const auto& [key, value] : metadata) {
@@ -108,7 +167,7 @@ size_t Storage::addDocument(const std::string& text, const std::map<std::string,
     return documentId;
 }
 
-bool Storage::updateDocument(size_t id, const std::string& text, const std::map<std::string, std::string>& metadata) {
+bool Storage::updateDocument(const std::string& id, const std::string& text, const std::map<std::string, std::string>& metadata) {
     if (!db_) {
         std::cerr << "Database not initialized" << std::endl;
         return false;
@@ -119,7 +178,7 @@ bool Storage::updateDocument(size_t id, const std::string& text, const std::map<
     if (!stmt) return false;
     
     sqlite3_bind_text(stmt, 1, text.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_int64(stmt, 2, static_cast<sqlite3_int64>(id));
+    sqlite3_bind_text(stmt, 2, id.c_str(), -1, SQLITE_STATIC);
     
     int rc = sqlite3_step(stmt);
     finalizeStatement(stmt);
@@ -129,11 +188,15 @@ bool Storage::updateDocument(size_t id, const std::string& text, const std::map<
         return false;
     }
     
+    if (sqlite3_changes(db_) == 0) {
+        return false; // No document found with this ID
+    }
+    
     // Update metadata (delete existing and add new)
     const std::string deleteSql = "DELETE FROM document_metadata WHERE document_id = ?;";
     sqlite3_stmt* deleteStmt = prepareStatement(deleteSql);
     if (deleteStmt) {
-        sqlite3_bind_int64(deleteStmt, 1, static_cast<sqlite3_int64>(id));
+        sqlite3_bind_text(deleteStmt, 1, id.c_str(), -1, SQLITE_STATIC);
         sqlite3_step(deleteStmt);
         finalizeStatement(deleteStmt);
     }
@@ -144,10 +207,57 @@ bool Storage::updateDocument(size_t id, const std::string& text, const std::map<
         }
     }
     
-    return sqlite3_changes(db_) > 0;
+    return true;
 }
 
-bool Storage::deleteDocument(size_t id) {
+bool Storage::upsertDocument(const std::string& id, const std::string& text, const std::map<std::string, std::string>& metadata) {
+    if (!db_) {
+        std::cerr << "Database not initialized" << std::endl;
+        return false;
+    }
+    
+    // Use INSERT OR REPLACE for atomic upsert
+    const std::string sql = R"(
+        INSERT OR REPLACE INTO documents (id, text, created_at, updated_at) 
+        VALUES (?, ?, 
+                COALESCE((SELECT created_at FROM documents WHERE id = ?), CURRENT_TIMESTAMP),
+                CURRENT_TIMESTAMP);
+    )";
+    
+    sqlite3_stmt* stmt = prepareStatement(sql);
+    if (!stmt) return false;
+    
+    sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, text.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 3, id.c_str(), -1, SQLITE_STATIC);
+    
+    int rc = sqlite3_step(stmt);
+    finalizeStatement(stmt);
+    
+    if (rc != SQLITE_DONE) {
+        std::cerr << "Error upserting document: " << sqlite3_errmsg(db_) << std::endl;
+        return false;
+    }
+    
+    // Update metadata (delete existing and add new)
+    const std::string deleteSql = "DELETE FROM document_metadata WHERE document_id = ?;";
+    sqlite3_stmt* deleteStmt = prepareStatement(deleteSql);
+    if (deleteStmt) {
+        sqlite3_bind_text(deleteStmt, 1, id.c_str(), -1, SQLITE_STATIC);
+        sqlite3_step(deleteStmt);
+        finalizeStatement(deleteStmt);
+    }
+    
+    for (const auto& [key, value] : metadata) {
+        if (!addMetadata(id, key, value)) {
+            std::cerr << "Warning: Failed to update metadata " << key << " for document " << id << std::endl;
+        }
+    }
+    
+    return true;
+}
+
+bool Storage::deleteDocument(const std::string& id) {
     if (!db_) {
         std::cerr << "Database not initialized" << std::endl;
         return false;
@@ -157,7 +267,7 @@ bool Storage::deleteDocument(size_t id) {
     sqlite3_stmt* stmt = prepareStatement(sql);
     if (!stmt) return false;
     
-    sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(id));
+    sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_STATIC);
     
     int rc = sqlite3_step(stmt);
     finalizeStatement(stmt);
@@ -170,7 +280,7 @@ bool Storage::deleteDocument(size_t id) {
     return sqlite3_changes(db_) > 0;
 }
 
-Document Storage::getDocument(size_t id) {
+Document Storage::getDocument(const std::string& id) {
     Document doc;
     if (!db_) {
         std::cerr << "Database not initialized" << std::endl;
@@ -181,7 +291,7 @@ Document Storage::getDocument(size_t id) {
     sqlite3_stmt* stmt = prepareStatement(sql);
     if (!stmt) return doc;
     
-    sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(id));
+    sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_STATIC);
     
     if (sqlite3_step(stmt) == SQLITE_ROW) {
         doc = buildDocumentFromRow(stmt);
@@ -268,7 +378,7 @@ std::vector<Document> Storage::getDocumentsByMetadata(const std::string& key, co
     return documents;
 }
 
-bool Storage::addMetadata(size_t documentId, const std::string& key, const std::string& value) {
+bool Storage::addMetadata(const std::string& documentId, const std::string& key, const std::string& value) {
     if (!db_) {
         std::cerr << "Database not initialized" << std::endl;
         return false;
@@ -278,7 +388,7 @@ bool Storage::addMetadata(size_t documentId, const std::string& key, const std::
     sqlite3_stmt* stmt = prepareStatement(sql);
     if (!stmt) return false;
     
-    sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(documentId));
+    sqlite3_bind_text(stmt, 1, documentId.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 2, key.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 3, value.c_str(), -1, SQLITE_STATIC);
     
@@ -288,11 +398,11 @@ bool Storage::addMetadata(size_t documentId, const std::string& key, const std::
     return rc == SQLITE_DONE;
 }
 
-bool Storage::updateMetadata(size_t documentId, const std::string& key, const std::string& value) {
+bool Storage::updateMetadata(const std::string& documentId, const std::string& key, const std::string& value) {
     return addMetadata(documentId, key, value); // INSERT OR REPLACE handles updates
 }
 
-bool Storage::deleteMetadata(size_t documentId, const std::string& key) {
+bool Storage::deleteMetadata(const std::string& documentId, const std::string& key) {
     if (!db_) {
         std::cerr << "Database not initialized" << std::endl;
         return false;
@@ -302,7 +412,7 @@ bool Storage::deleteMetadata(size_t documentId, const std::string& key) {
     sqlite3_stmt* stmt = prepareStatement(sql);
     if (!stmt) return false;
     
-    sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(documentId));
+    sqlite3_bind_text(stmt, 1, documentId.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 2, key.c_str(), -1, SQLITE_STATIC);
     
     int rc = sqlite3_step(stmt);
@@ -311,7 +421,7 @@ bool Storage::deleteMetadata(size_t documentId, const std::string& key) {
     return rc == SQLITE_DONE && sqlite3_changes(db_) > 0;
 }
 
-std::map<std::string, std::string> Storage::getMetadata(size_t documentId) {
+std::map<std::string, std::string> Storage::getMetadata(const std::string& documentId) {
     std::map<std::string, std::string> metadata;
     if (!db_) {
         std::cerr << "Database not initialized" << std::endl;
@@ -322,7 +432,7 @@ std::map<std::string, std::string> Storage::getMetadata(size_t documentId) {
     sqlite3_stmt* stmt = prepareStatement(sql);
     if (!stmt) return metadata;
     
-    sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(documentId));
+    sqlite3_bind_text(stmt, 1, documentId.c_str(), -1, SQLITE_STATIC);
     
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         std::string key = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
@@ -353,8 +463,8 @@ size_t Storage::getDocumentCount() {
     return count;
 }
 
-std::vector<size_t> Storage::getAllDocumentIds() {
-    std::vector<size_t> ids;
+std::vector<std::string> Storage::getAllDocumentIds() {
+    std::vector<std::string> ids;
     if (!db_) {
         std::cerr << "Database not initialized" << std::endl;
         return ids;
@@ -365,11 +475,32 @@ std::vector<size_t> Storage::getAllDocumentIds() {
     if (!stmt) return ids;
     
     while (sqlite3_step(stmt) == SQLITE_ROW) {
-        ids.push_back(static_cast<size_t>(sqlite3_column_int64(stmt, 0)));
+        const char* id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        if (id) {
+            ids.push_back(id);
+        }
     }
     
     finalizeStatement(stmt);
     return ids;
+}
+
+bool Storage::documentExists(const std::string& id) {
+    if (!db_) {
+        std::cerr << "Database not initialized" << std::endl;
+        return false;
+    }
+    
+    const std::string sql = "SELECT 1 FROM documents WHERE id = ? LIMIT 1;";
+    sqlite3_stmt* stmt = prepareStatement(sql);
+    if (!stmt) return false;
+    
+    sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_STATIC);
+    
+    bool exists = (sqlite3_step(stmt) == SQLITE_ROW);
+    finalizeStatement(stmt);
+    
+    return exists;
 }
 
 bool Storage::beginTransaction() {
@@ -445,7 +576,11 @@ void Storage::finalizeStatement(sqlite3_stmt* stmt) {
 
 Document Storage::buildDocumentFromRow(sqlite3_stmt* stmt) {
     Document doc;
-    doc.id = static_cast<size_t>(sqlite3_column_int64(stmt, 0));
+    
+    const char* idPtr = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+    if (idPtr) {
+        doc.id = idPtr;
+    }
     
     const char* textPtr = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
     if (textPtr) {
@@ -472,7 +607,7 @@ int Storage::documentCallback(void* data, int argc, char** argv, char** azColNam
     
     if (argc >= 2 && argv[0] && argv[1]) {
         Document doc;
-        doc.id = static_cast<size_t>(std::stoull(argv[0]));
+        doc.id = argv[0];
         doc.text = argv[1];
         documents->push_back(doc);
     }

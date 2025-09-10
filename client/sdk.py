@@ -1,5 +1,11 @@
 import requests
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, TypedDict
+
+
+class Document(TypedDict):
+    id: str
+    text: str
+    metadata: Optional[Dict[str, str]]
 
 class Client:
     """OpenAI-style client for the semantic search API."""
@@ -40,13 +46,19 @@ class DocumentsClient:
     def __init__(self, client: Client):
         self.client = client
     
-    def create(self, text: str, metadata: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    @property
+    def total_count(self) -> int:
+        """Get the total count of documents in the database."""
+        return self.count()
+    
+    def create(self, text: str, metadata: Optional[Dict[str, str]] = None, id: Optional[str] = None) -> Document:
         """
         Create a new document.
         
         Args:
             text: The document text.
             metadata: Optional metadata dictionary.
+            id: Optional custom ID for the document (e.g., file path).
             
         Returns:
             Response containing the document ID.
@@ -54,54 +66,102 @@ class DocumentsClient:
         payload = {"text": text}
         if metadata:
             payload["metadata"] = metadata
+        if id:
+            payload["id"] = id
         
         response = self.client._request("POST", "/documents", json=payload)
         return response.json()
     
-    def retrieve(self, document_id: int) -> Dict[str, Any]:
+    def retrieve(self, document_id: str) -> Dict[str, Any]:
         """
         Retrieve a document by ID.
         
         Args:
-            document_id: The document ID.
+            document_id: The document ID (string).
             
         Returns:
             The document data.
         """
-        response = self.client._request("GET", f"/documents/{document_id}")
+        # URL encode the ID to handle special characters like paths
+        from urllib.parse import quote
+        encoded_id = quote(str(document_id), safe='')
+        response = self.client._request("GET", f"/documents/{encoded_id}")
         return response.json()
     
-    def update(self, document_id: int, text: str, metadata: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    def update(self, document_id: str, text: str, metadata: Optional[Dict[str, str]] = None) -> Document:
         """
         Update an existing document.
         
         Args:
-            document_id: The document ID to update.
+            document_id: The document ID to update (string).
             text: The new document text.
             metadata: Optional new metadata.
             
         Returns:
             Response containing update status.
         """
+        from urllib.parse import quote
+        encoded_id = quote(str(document_id), safe='')
         payload = {"text": text}
         if metadata:
             payload["metadata"] = metadata
         
-        response = self.client._request("PUT", f"/documents/{document_id}", json=payload)
+        response = self.client._request("PUT", f"/documents/{encoded_id}", json=payload)
         return response.json()
     
-    def delete(self, document_id: int) -> Dict[str, Any]:
+    def upsert(self, document_id: str, text: str, metadata: Optional[Dict[str, str]] = None) -> Document:
+        """
+        Upsert a document (insert if doesn't exist, update if exists).
+        
+        Args:
+            document_id: The document ID (string).
+            text: The document text.
+            metadata: Optional metadata.
+            
+        Returns:
+            Response containing upsert status.
+        """
+        from urllib.parse import quote
+        encoded_id = quote(str(document_id), safe='')
+        payload = {"text": text}
+        if metadata:
+            payload["metadata"] = metadata
+        
+        response = self.client._request("PUT", f"/documents/{encoded_id}", json=payload)
+        return response.json()
+    
+    def delete(self, document_id: str) -> Document:
         """
         Delete a document.
         
         Args:
-            document_id: The document ID to delete.
+            document_id: The document ID to delete (string).
             
         Returns:
             Response containing deletion status.
         """
-        response = self.client._request("DELETE", f"/documents/{document_id}")
+        from urllib.parse import quote
+        encoded_id = quote(str(document_id), safe='')
+        response = self.client._request("DELETE", f"/documents/{encoded_id}")
         return response.json()
+    
+    def count(self, key: Optional[str] = None, value: Optional[str] = None) -> int:
+        """
+        Count documents, optionally filtered by metadata.
+        
+        Args:
+            key: Optional metadata key to filter by.
+            value: Optional metadata value to filter by.
+            
+        Returns:
+            Count of documents.
+        """
+        params = {}
+        if key and value:
+            params = {"key": key, "value": value}
+        
+        response = self.client._request("GET", "/documents/count", params=params)
+        return response.json().get("count", 0)
     
     def list(self, key: Optional[str] = None, value: Optional[str] = None) -> List[Dict[str, Any]]:
         """
@@ -121,12 +181,13 @@ class DocumentsClient:
         response = self.client._request("GET", "/documents", params=params)
         return response.json()
     
-    def create_batch(self, documents: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def create_batch(self, documents: List[Document]) -> List[Document]:
         """
         Create multiple documents in a batch.
         
         Args:
-            documents: List of document dictionaries with 'text' and optional 'metadata'.
+            documents: List of document dictionaries with 'text', optional 'metadata', and optional 'id'.
+                      Example: [{'text': 'content', 'metadata': {'key': 'value'}, 'id': 'custom_id'}]
             
         Returns:
             Response containing batch creation status.
@@ -134,6 +195,32 @@ class DocumentsClient:
         payload = {"documents": documents}
         response = self.client._request("POST", "/documents/batch", json=payload)
         return response.json()
+    
+    def upsert_batch(self, documents: List[Document]) -> List[Document]:
+        """
+        Upsert multiple documents (insert or update each).
+        
+        Args:
+            documents: List of document dictionaries with 'id', 'text', and optional 'metadata'.
+                      The 'id' field is required for upsert.
+            
+        Returns:
+            List of responses for each upsert operation.
+        """
+        results = []
+        for doc in documents:
+            if 'id' not in doc:
+                results.append({"error": "Document missing required 'id' field for upsert"})
+                continue
+            
+            result = self.upsert(
+                document_id=doc['id'],
+                text=doc['text'],
+                metadata=doc.get('metadata')
+            )
+            results.append(result)
+        
+        return results
 
 
 class SearchClient:
@@ -149,7 +236,7 @@ class SearchClient:
               metadata: Optional[Dict[str, str]] = None,
               threshold: float = 0.0,
               efSearch: int = 350
-    ) -> List[Dict[str, Any]]:
+    ) -> List[Document]:
         """
         Search for documents.
         
@@ -184,7 +271,7 @@ class SearchClient:
         response = self.client._request("POST", "/search", json=payload)
         return response.json()
     
-    def semantic(self, query: str, k: int = 10, threshold: float = 0.0, efSearch: int = 350) -> List[Dict[str, Any]]:
+    def semantic(self, query: str, k: int = 10, threshold: float = 0.0, efSearch: int = 350) -> List[Document]:
         """
         Perform semantic search using embeddings.
         
@@ -199,7 +286,7 @@ class SearchClient:
         """
         return self.query(query, k=k, type="semantic", threshold=threshold, efSearch=efSearch)
     
-    def fulltext(self, query: str, k: int = 10, threshold: float = 0.0) -> List[Dict[str, Any]]:
+    def fulltext(self, query: str, k: int = 10, threshold: float = 0.0) -> List[Document]:
         """
         Perform full-text search using SQL LIKE.
         
@@ -213,7 +300,7 @@ class SearchClient:
         """
         return self.query(query, k=k, type="text", threshold=threshold)
     
-    def by_metadata(self, key: str, value: str, k: int = 10) -> List[Dict[str, Any]]:
+    def by_metadata(self, key: str, value: str, k: int = 10) -> List[Document]:
         """
         Search documents by metadata key-value pair.
         

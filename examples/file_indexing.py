@@ -25,7 +25,7 @@ for text in texts:
 print(f"Indexed {len(list(COUNTRIES.iterdir()))} documents.")
 
 start_time = time()
-results = client.search.query("Population of sweden", k=10)
+results = client.search.query("population of portugal", threshold=0.7)
 end_time = time()
 print(f"Search completed in {end_time - start_time:.2f} seconds.")
 

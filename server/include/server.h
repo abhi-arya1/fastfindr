@@ -41,6 +41,7 @@ private:
     void handleDelete(const httplib::Request& req, httplib::Response& res);
     void handleBatchInsert(const httplib::Request& req, httplib::Response& res);
     void handleTextSearch(const httplib::Request& req, httplib::Response& res);
+    void handleCount(const httplib::Request& req, httplib::Response& res);
 };
 
 ServerConfig parseServerOptions(int argc, char** argv);

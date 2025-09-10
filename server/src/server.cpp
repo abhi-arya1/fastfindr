@@ -84,13 +84,13 @@ void SearchServer::setupRoutes() {
             handleInsert(req, res);
         });
 
-        // Upsert endpoint
-        server_.Put("/documents/([0-9]+)", [this](const httplib::Request& req, httplib::Response& res) {
+        // Upsert endpoint (accepts any non-slash characters as ID)
+        server_.Put("/documents/([^/]+)", [this](const httplib::Request& req, httplib::Response& res) {
             handleUpsert(req, res);
         });
 
-        // Get by ID endpoint
-        server_.Get("/documents/([0-9]+)", [this](const httplib::Request& req, httplib::Response& res) {
+        // Get by ID endpoint (accepts any non-slash characters as ID)
+        server_.Get("/documents/([^/]+)", [this](const httplib::Request& req, httplib::Response& res) {
             handleGetById(req, res);
         });
 
@@ -99,14 +99,19 @@ void SearchServer::setupRoutes() {
             handleGetByMetadata(req, res);
         });
 
-        // Delete endpoint
-        server_.Delete("/documents/([0-9]+)", [this](const httplib::Request& req, httplib::Response& res) {
+        // Delete endpoint (accepts any non-slash characters as ID)
+        server_.Delete("/documents/([^/]+)", [this](const httplib::Request& req, httplib::Response& res) {
             handleDelete(req, res);
         });
 
         // Batch insert endpoint
         server_.Post("/documents/batch", [this](const httplib::Request& req, httplib::Response& res) {
             handleBatchInsert(req, res);
+        });
+
+        // Count endpoint
+        server_.Get("/documents/count", [this](const httplib::Request& req, httplib::Response& res) {
+            handleCount(req, res);
         });
 
         // Index management endpoints
@@ -204,6 +209,7 @@ void SearchServer::handleInsert(const httplib::Request& req, httplib::Response& 
 
             std::string text = request["text"];
             std::map<std::string, std::string> metadata;
+            std::string customId = request.value("id", "");
             
             if (request.contains("metadata")) {
                 for (auto& [key, value] : request["metadata"].items()) {
@@ -211,9 +217,9 @@ void SearchServer::handleInsert(const httplib::Request& req, httplib::Response& 
                 }
             }
 
-            size_t documentId = vectorSearch_->addDocument(text, metadata);
-            if (documentId == 0) {
-                json error = {{"error", "Failed to insert document"}};
+            std::string documentId = vectorSearch_->addDocument(text, metadata, customId);
+            if (documentId.empty()) {
+                json error = {{"error", "Failed to insert document. If you provided a custom ID, it may already exist."}};
                 res.status = 500;
                 res.set_content(error.dump(), "application/json");
                 return;
@@ -236,7 +242,7 @@ void SearchServer::handleInsert(const httplib::Request& req, httplib::Response& 
 
 void SearchServer::handleUpsert(const httplib::Request& req, httplib::Response& res) {
         try {
-            size_t id = std::stoull(req.matches[1]);
+            std::string id = req.matches[1];
             json request = json::parse(req.body);
             
             if (!request.contains("text")) {
@@ -255,20 +261,8 @@ void SearchServer::handleUpsert(const httplib::Request& req, httplib::Response& 
                 }
             }
 
-            // Check if document exists
-            Document existing = vectorSearch_->getDocument(id);
-            bool success;
-            
-            if (existing.id != 0) {
-                // Update existing document
-                success = vectorSearch_->updateDocument(id, text, metadata);
-            } else {
-                // This would require a different approach since we can't force specific IDs
-                json error = {{"error", "Document with specified ID does not exist. Use POST /documents to create new documents."}};
-                res.status = 404;
-                res.set_content(error.dump(), "application/json");
-                return;
-            }
+            // Use upsert which handles both insert and update
+            bool success = vectorSearch_->upsertDocument(id, text, metadata);
 
             if (!success) {
                 json error = {{"error", "Failed to upsert document"}};
@@ -294,10 +288,10 @@ void SearchServer::handleUpsert(const httplib::Request& req, httplib::Response& 
 
 void SearchServer::handleGetById(const httplib::Request& req, httplib::Response& res) {
         try {
-            size_t id = std::stoull(req.matches[1]);
+            std::string id = req.matches[1];
             Document doc = vectorSearch_->getDocument(id);
             
-            if (doc.id == 0) {
+            if (doc.id.empty()) {
                 json error = {{"error", "Document not found"}};
                 res.status = 404;
                 res.set_content(error.dump(), "application/json");
@@ -362,7 +356,7 @@ void SearchServer::handleGetByMetadata(const httplib::Request& req, httplib::Res
 
 void SearchServer::handleDelete(const httplib::Request& req, httplib::Response& res) {
         try {
-            size_t id = std::stoull(req.matches[1]);
+            std::string id = req.matches[1];
             
             bool success = vectorSearch_->deleteDocument(id);
             if (!success) {
@@ -384,6 +378,41 @@ void SearchServer::handleDelete(const httplib::Request& req, httplib::Response& 
         }
     }
 
+void SearchServer::handleCount(const httplib::Request& req, httplib::Response& res) {
+        try {
+            std::string key = req.get_param_value("key");
+            std::string value = req.get_param_value("value");
+            
+            size_t count = 0;
+            
+            if (!key.empty() && !value.empty()) {
+                // Count documents with specific metadata
+                auto documents = vectorSearch_->getStorage()->getDocumentsByMetadata(key, value);
+                count = documents.size();
+            } else {
+                // Count all documents
+                count = vectorSearch_->getDocumentCount();
+            }
+            
+            json response = {
+                {"count", count}
+            };
+            
+            if (!key.empty() && !value.empty()) {
+                response["filter"] = {
+                    {"key", key},
+                    {"value", value}
+                };
+            }
+            
+            res.set_content(response.dump(), "application/json");
+        } catch (const std::exception& e) {
+            json error = {{"error", e.what()}};
+            res.status = 500;
+            res.set_content(error.dump(), "application/json");
+        }
+    }
+
 void SearchServer::handleBatchInsert(const httplib::Request& req, httplib::Response& res) {
         try {
             json request = json::parse(req.body);
@@ -397,6 +426,7 @@ void SearchServer::handleBatchInsert(const httplib::Request& req, httplib::Respo
 
             std::vector<std::string> texts;
             std::vector<std::map<std::string, std::string>> metadataList;
+            std::vector<std::string> customIds;
             
             for (const auto& doc : request["documents"]) {
                 if (!doc.contains("text")) {
@@ -408,6 +438,13 @@ void SearchServer::handleBatchInsert(const httplib::Request& req, httplib::Respo
                 
                 texts.push_back(doc["text"]);
                 
+                // Check for custom ID
+                if (doc.contains("id")) {
+                    customIds.push_back(doc["id"]);
+                } else {
+                    customIds.push_back("");  // Empty string means generate random ID
+                }
+                
                 std::map<std::string, std::string> metadata;
                 if (doc.contains("metadata")) {
                     for (auto& [key, value] : doc["metadata"].items()) {
@@ -417,7 +454,7 @@ void SearchServer::handleBatchInsert(const httplib::Request& req, httplib::Respo
                 metadataList.push_back(metadata);
             }
 
-            vectorSearch_->addDocuments(texts, metadataList);
+            vectorSearch_->addDocuments(texts, metadataList, customIds);
             
             // Save index after batch insertion
             vectorSearch_->saveIndex(config_.index_path);

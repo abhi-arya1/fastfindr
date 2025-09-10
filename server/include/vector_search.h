@@ -10,7 +10,7 @@
 struct SearchResult {
     std::string text;
     float score;
-    size_t id;
+    std::string id;
     std::map<std::string, std::string> metadata;
 };
 
@@ -23,11 +23,13 @@ public:
     bool initialize();
     void loadOrCreateIndex(const std::string& index_file);
     
-    size_t addDocument(const std::string& text, const std::map<std::string, std::string>& metadata = {});
+    std::string addDocument(const std::string& text, const std::map<std::string, std::string>& metadata = {}, const std::string& customId = "");
     void addDocuments(const std::vector<std::string>& texts, 
-                      const std::vector<std::map<std::string, std::string>>& metadataList = {});
-    bool updateDocument(size_t id, const std::string& text, const std::map<std::string, std::string>& metadata = {});
-    bool deleteDocument(size_t id);
+                      const std::vector<std::map<std::string, std::string>>& metadataList = {},
+                      const std::vector<std::string>& customIds = {});
+    bool updateDocument(const std::string& id, const std::string& text, const std::map<std::string, std::string>& metadata = {});
+    bool upsertDocument(const std::string& id, const std::string& text, const std::map<std::string, std::string>& metadata = {});
+    bool deleteDocument(const std::string& id);
     
     std::vector<SearchResult> searchText(const std::string& query, int k = 10, float threshold = 0.0f, int efSearch = 350);
     std::vector<SearchResult> searchEmbedding(const std::vector<float>& queryEmbedding, int k = 10, float threshold = 0.0f, int efSearch = 350);
@@ -36,7 +38,7 @@ public:
     void saveIndex(const std::string& index_file);
     void rebuildIndex();
     
-    Document getDocument(size_t id);
+    Document getDocument(const std::string& id);
     std::vector<Document> getAllDocuments();
     size_t getDocumentCount();
     
@@ -56,10 +58,10 @@ private:
     
     int d;  // embedding dimension
     faiss::IndexHNSWFlat* index;
-    std::vector<size_t> indexToDocumentId_;  // Maps FAISS index positions to document IDs
+    std::vector<std::string> indexToDocumentId_;  // Maps FAISS index positions to document IDs
     
     void initializeIndex();
     std::vector<float> getEmbedding(const std::string& text);
     void synchronizeIndex();
-    SearchResult buildSearchResult(size_t documentId, float score);
+    SearchResult buildSearchResult(const std::string& documentId, float score);
 };
