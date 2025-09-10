@@ -146,7 +146,10 @@ class SearchClient:
               query: str, 
               k: int = 10, 
               type: str = "semantic",
-              metadata: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+              metadata: Optional[Dict[str, str]] = None,
+              threshold: float = 0.0,
+              efSearch: int = 350
+    ) -> List[Dict[str, Any]]:
         """
         Search for documents.
         
@@ -155,6 +158,8 @@ class SearchClient:
             k: Number of results to return (default: 10).
             type: Search type - "semantic" (default), "text", or "fulltext".
             metadata: Optional metadata filter with 'key' and 'value'.
+            threshold: Minimum score threshold for results (default: 0.0).
+            efSearch: HNSW search parameter for performance tuning (default: 350).
             
         Returns:
             List of search results with scores.
@@ -170,34 +175,43 @@ class SearchClient:
         if metadata:
             payload["metadata"] = metadata
         
+        if threshold != 0.0:
+            payload["threshold"] = threshold
+        
+        if efSearch != 350:
+            payload["efSearch"] = efSearch
+        
         response = self.client._request("POST", "/search", json=payload)
         return response.json()
     
-    def semantic(self, query: str, k: int = 10) -> List[Dict[str, Any]]:
+    def semantic(self, query: str, k: int = 10, threshold: float = 0.0, efSearch: int = 350) -> List[Dict[str, Any]]:
         """
         Perform semantic search using embeddings.
         
         Args:
             query: The search query text.
             k: Number of results to return.
+            threshold: Minimum score threshold for results (default: 0.0).
+            efSearch: HNSW search parameter for performance tuning (default: 350).
             
         Returns:
             List of search results with similarity scores.
         """
-        return self.query(query, k=k, type="semantic")
+        return self.query(query, k=k, type="semantic", threshold=threshold, efSearch=efSearch)
     
-    def fulltext(self, query: str, k: int = 10) -> List[Dict[str, Any]]:
+    def fulltext(self, query: str, k: int = 10, threshold: float = 0.0) -> List[Dict[str, Any]]:
         """
         Perform full-text search using SQL LIKE.
         
         Args:
             query: The search query text.
             k: Number of results to return.
+            threshold: Minimum score threshold for results (default: 0.0).
             
         Returns:
             List of search results.
         """
-        return self.query(query, k=k, type="text")
+        return self.query(query, k=k, type="text", threshold=threshold)
     
     def by_metadata(self, key: str, value: str, k: int = 10) -> List[Dict[str, Any]]:
         """
