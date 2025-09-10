@@ -42,6 +42,10 @@ private:
     void handleBatchInsert(const httplib::Request& req, httplib::Response& res);
     void handleTextSearch(const httplib::Request& req, httplib::Response& res);
     void handleCount(const httplib::Request& req, httplib::Response& res);
+    void handleBatchUpsert(const httplib::Request& req, httplib::Response& res);
+    void handleDeleteByIds(const httplib::Request& req, httplib::Response& res);
+    void handleGetByIds(const httplib::Request& req, httplib::Response& res);
+    void handleCountByMetadata(const httplib::Request& req, httplib::Response& res);
 };
 
 ServerConfig parseServerOptions(int argc, char** argv);
