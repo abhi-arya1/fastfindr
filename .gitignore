@@ -9,6 +9,11 @@ Thumbs.db
 
 # Model 
 embeddinggemma-onnx/
+server/embeddinggemma-onnx/
+
+# Third-party dependencies
+server/third_party/
+third_party/
 
 # Tests
 sbert_example/
@@ -23,6 +28,7 @@ install_manifest.txt
 compile_commands.json
 
 # Build directories
+*build/
 build/
 out/
 bin/

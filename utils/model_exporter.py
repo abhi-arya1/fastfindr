@@ -3,7 +3,7 @@ from pathlib import Path
 
 MODEL = "google/embeddinggemma-300m"
 
-OUTPUT = Path(__file__).parent.parent / "embeddinggemma-onnx"
+OUTPUT = Path(__file__).parent.parent / "server" / "embeddinggemma-onnx"
 
 print(f"Starting export of {MODEL} to {OUTPUT}")
 
@@ -14,7 +14,6 @@ run([
     "--model",
     MODEL,
     str(OUTPUT),
-    # "--quantize"
 ])
 
 print(f"Model {MODEL} exported to {OUTPUT}")

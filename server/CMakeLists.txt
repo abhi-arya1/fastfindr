@@ -1,10 +1,19 @@
 cmake_minimum_required(VERSION 3.16)
-project(hnsw_search)
+project(search_server)
 
 set(CMAKE_CXX_STANDARD 17)
 
 find_path(FAISS_INCLUDE_DIR NAMES faiss/IndexHNSW.h PATHS /opt/homebrew/include)
 find_library(FAISS_LIBRARY NAMES faiss PATHS /opt/homebrew/lib)
+
+# Find httplib
+find_path(HTTPLIB_INCLUDE_DIR NAMES httplib.h PATHS /opt/homebrew/include)
+
+# Find nlohmann/json
+find_path(NLOHMANN_JSON_INCLUDE_DIR NAMES nlohmann/json.hpp PATHS /opt/homebrew/include)
+
+# Find SQLite3
+find_package(SQLite3 REQUIRED)
 
 # Find ONNX Runtime
 set(ONNXRUNTIME_ROOT_PATH "/opt/homebrew" CACHE PATH "ONNX Runtime root directory")
@@ -36,25 +45,32 @@ add_subdirectory(third_party/tokenizers-cpp EXCLUDE_FROM_ALL)
 # Include directories  
 include_directories(include)
 
-# Collect source files
+# Collect source files from the src directory
 file(GLOB_RECURSE SOURCES "src/*.cpp")
 
-add_executable(hnsw_search main.cpp ${SOURCES})
+# Create server executable (server.cpp contains main)
+add_executable(server ${SOURCES})
 
-target_include_directories(hnsw_search PRIVATE 
+# Configure server target
+target_include_directories(server PRIVATE 
     ${FAISS_INCLUDE_DIR} 
     ${ONNXRUNTIME_INCLUDE_DIR}
     ${ONNXRUNTIME_ROOT_PATH}/include
+    ${HTTPLIB_INCLUDE_DIR}
+    ${NLOHMANN_JSON_INCLUDE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/tokenizers-cpp/include
     include)
-target_link_libraries(hnsw_search 
+    
+target_link_libraries(server 
     ${FAISS_LIBRARY}
     ${ONNXRUNTIME_LIB}
+    SQLite::SQLite3
     tokenizers_cpp)
 
-# Link OpenMP
+
+# Link OpenMP for server
 if(OpenMP_CXX_FOUND)
-    target_include_directories(hnsw_search PRIVATE ${OpenMP_CXX_INCLUDE_DIR})
-    target_compile_options(hnsw_search PRIVATE ${OpenMP_CXX_FLAGS})
-    target_link_libraries(hnsw_search ${OpenMP_CXX_LIBRARY})
+    target_include_directories(server PRIVATE ${OpenMP_CXX_INCLUDE_DIR})
+    target_compile_options(server PRIVATE ${OpenMP_CXX_FLAGS})
+    target_link_libraries(server ${OpenMP_CXX_LIBRARY})
 endif()
