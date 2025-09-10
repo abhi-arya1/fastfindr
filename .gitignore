@@ -17,6 +17,7 @@ third_party/
 
 # Tests
 sbert_example/
+internal_tests/
 
 # CMake generated files
 CMakeCache.txt
