@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <faiss/index_io.h>
 #include <algorithm>
+#include <chrono>
 
 VectorSearch::VectorSearch(const std::string& modelPath, const std::string& tokenizerPath, 
                          const std::string& dbPath, int M, int efConstruction)
@@ -91,7 +92,7 @@ std::vector<SearchResult> VectorSearch::searchEmbedding(const std::vector<float>
     
     for (int i = 0; i < k; ++i) {
         if (indices[i] >= 0 && indices[i] < static_cast<faiss::idx_t>(indexToDocumentId_.size())) {
-            size_t documentId = indexToDocumentId_[indices[i]];
+            std::string documentId = indexToDocumentId_[indices[i]];
             float score = 1.0f / (1.0f + distances[i]); // Convert distance to similarity score
             
             // Only include results above the threshold
@@ -132,25 +133,29 @@ void VectorSearch::saveIndex(const std::string& index_file) {
     }
 }
 
-size_t VectorSearch::addDocument(const std::string& text, const std::map<std::string, std::string>& metadata) {
+std::string VectorSearch::addDocument(const std::string& text, const std::map<std::string, std::string>& metadata, const std::string& customId) {
     if (!isInitialized()) {
         std::cerr << "Error: System not initialized" << std::endl;
-        return 0;
+        return "";
     }
     
+    // Use custom ID if provided, otherwise generate one
+    std::string documentId = customId.empty() ? std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) : customId;
+    
     // Add document to storage first
-    size_t documentId = storage_->addDocument(text, metadata);
-    if (documentId == 0) {
+    std::string storedId = storage_->addDocument(text, metadata, documentId);
+    if (storedId.empty()) {
         std::cerr << "Failed to add document to storage" << std::endl;
-        return 0;
+        return "";
     }
+    documentId = storedId;  // Use the ID returned by storage
     
     // Generate embedding
     auto embedding = getEmbedding(text);
     if (embedding.empty()) {
         std::cerr << "Failed to generate embedding" << std::endl;
         storage_->deleteDocument(documentId);
-        return 0;
+        return "";
     }
     
     if (!index) {
@@ -166,7 +171,8 @@ size_t VectorSearch::addDocument(const std::string& text, const std::map<std::st
 }
 
 void VectorSearch::addDocuments(const std::vector<std::string>& texts, 
-                               const std::vector<std::map<std::string, std::string>>& metadataList) {
+                               const std::vector<std::map<std::string, std::string>>& metadataList,
+                               const std::vector<std::string>& customIds) {
     if (!isInitialized()) {
         std::cerr << "Error: System not initialized" << std::endl;
         return;
@@ -175,17 +181,21 @@ void VectorSearch::addDocuments(const std::vector<std::string>& texts,
     storage_->beginTransaction();
     
     try {
-        std::vector<size_t> documentIds;
+        std::vector<std::string> documentIds;
         documentIds.reserve(texts.size());
         
         // Add documents to storage
         for (size_t i = 0; i < texts.size(); ++i) {
             const auto& metadata = (i < metadataList.size()) ? metadataList[i] : std::map<std::string, std::string>{};
-            size_t documentId = storage_->addDocument(texts[i], metadata);
-            if (documentId == 0) {
+            std::string documentId = (i < customIds.size() && !customIds[i].empty()) ? 
+                                    customIds[i] : 
+                                    std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "_" + std::to_string(i);
+            
+            std::string storedId = storage_->addDocument(texts[i], metadata, documentId);
+            if (storedId.empty()) {
                 throw std::runtime_error("Failed to add document to storage");
             }
-            documentIds.push_back(documentId);
+            documentIds.push_back(storedId);
         }
         
         // Generate embeddings
@@ -218,7 +228,7 @@ void VectorSearch::addDocuments(const std::vector<std::string>& texts,
     }
 }
 
-bool VectorSearch::updateDocument(size_t id, const std::string& text, const std::map<std::string, std::string>& metadata) {
+bool VectorSearch::updateDocument(const std::string& id, const std::string& text, const std::map<std::string, std::string>& metadata) {
     if (!isInitialized()) {
         std::cerr << "Error: System not initialized" << std::endl;
         return false;
@@ -233,7 +243,7 @@ bool VectorSearch::updateDocument(size_t id, const std::string& text, const std:
     return true;
 }
 
-bool VectorSearch::deleteDocument(size_t id) {
+bool VectorSearch::deleteDocument(const std::string& id) {
     if (!isInitialized()) {
         std::cerr << "Error: System not initialized" << std::endl;
         return false;
@@ -246,6 +256,24 @@ bool VectorSearch::deleteDocument(size_t id) {
     // Rebuild index to reflect changes
     rebuildIndex();
     return true;
+}
+
+bool VectorSearch::upsertDocument(const std::string& id, const std::string& text, const std::map<std::string, std::string>& metadata) {
+    if (!isInitialized()) {
+        std::cerr << "Error: System not initialized" << std::endl;
+        return false;
+    }
+    
+    // Check if document exists
+    Document existingDoc = storage_->getDocument(id);
+    if (!existingDoc.id.empty()) {
+        // Document exists, update it
+        return updateDocument(id, text, metadata);
+    } else {
+        // Document doesn't exist, add it
+        std::string result = addDocument(text, metadata, id);
+        return !result.empty();
+    }
 }
 
 void VectorSearch::rebuildIndex() {
@@ -312,7 +340,7 @@ void VectorSearch::synchronizeIndex() {
     }
 }
 
-Document VectorSearch::getDocument(size_t id) {
+Document VectorSearch::getDocument(const std::string& id) {
     if (!storage_) {
         return Document();
     }
@@ -344,7 +372,7 @@ void VectorSearch::initializeIndex() {
     }
     
     index = new faiss::IndexHNSWFlat(d, 32); // M = 16
-    index->hnsw.efConstruction = 400;
+    index->hnsw.efConstruction = 300;
     
     std::cout << "Initialized HNSW index with dimension " << d << std::endl;
 }
@@ -358,7 +386,7 @@ std::vector<float> VectorSearch::getEmbedding(const std::string& text) {
     return inferenceEngine_->getEmbedding(text);
 }
 
-SearchResult VectorSearch::buildSearchResult(size_t documentId, float score) {
+SearchResult VectorSearch::buildSearchResult(const std::string& documentId, float score) {
     Document doc = storage_->getDocument(documentId);
     
     SearchResult result;

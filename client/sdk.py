@@ -235,7 +235,7 @@ class SearchClient:
               type: str = "semantic",
               metadata: Optional[Dict[str, str]] = None,
               threshold: float = 0.0,
-              efSearch: int = 350
+              efSearch: int = 200
     ) -> List[Document]:
         """
         Search for documents.
@@ -265,7 +265,7 @@ class SearchClient:
         if threshold != 0.0:
             payload["threshold"] = threshold
         
-        if efSearch != 350:
+        if efSearch != 200:
             payload["efSearch"] = efSearch
         
         response = self.client._request("POST", "/search", json=payload)
@@ -279,7 +279,7 @@ class SearchClient:
             query: The search query text.
             k: Number of results to return.
             threshold: Minimum score threshold for results (default: 0.0).
-            efSearch: HNSW search parameter for performance tuning (default: 350).
+            efSearch: HNSW search parameter for performance tuning (default: 200).
             
         Returns:
             List of search results with similarity scores.

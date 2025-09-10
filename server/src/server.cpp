@@ -143,7 +143,7 @@ void SearchServer::handleSearch(const httplib::Request& req, httplib::Response& 
             std::string query = request["query"];
             int k = request.value("k", 10);
             float threshold = request.value("threshold", 0.0f);
-            int efSearch = request.value("efSearch", 350);
+            int efSearch = request.value("efSearch", 200);
             
             std::vector<SearchResult> results;
             std::string searchType = request.value("type", "semantic");

@@ -1,3 +1,4 @@
 onnxruntime
 optimum[exporters]
 requests
+sentence-transformers
